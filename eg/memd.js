@@ -5,12 +5,14 @@
 
 var Server = require('../index.js').Server;
 
+var port = process.argv[2] || 22422;
+
 var server = new Server();
 server.on('error', function (e) {
-    console.log("Socket error!!: " + e);
+    console.log("# Socket error!!: " + e);
 });
 server.on('end', function () {
-    console.log("END!!");
+    console.log("# END!!");
 });
 server.setHandlers({
     GET: function (sock, keys) {
@@ -79,4 +81,4 @@ server.setHandlers({
     }
 });
 server.storage = {};
-server.listen(22422);
+server.listen(port);

@@ -4,13 +4,21 @@ use warnings;
 use utf8;
 use 5.010000;
 use autodie;
+use Test::TCP;
 use Cache::Memcached::Fast;
 use Cache::Memcached;
 use Data::Dumper;
 use Test::More;
 
+my $server = Test::TCP->new(
+    code => sub {
+        my $port = shift;
+        exec 'node', 'eg/memd.js', $port;
+    }
+);
+
 my $memd = Cache::Memcached::Fast->new({
-    servers => ['127.0.0.1:22422']
+    servers => ['127.0.0.1:' . $server->port]
 });
 $memd->flush_all();
 is($memd->get("YO"), undef);
