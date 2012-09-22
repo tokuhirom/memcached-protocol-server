@@ -2,8 +2,6 @@
 "use strict";
 var net = require('net');
 var events =  require('events');
-var util = require('util');
-var inherits = require('inherits');
 
 var TextParser = {
     get: function (buffer, self, csock) {
@@ -139,6 +137,12 @@ MemcachedProtocolServer.prototype = new events.EventEmitter();
 MemcachedProtocolServer.prototype.listen = function (port, host) {
     this.server.listen(port, host);
 };
+MemcachedProtocolServer.prototype.setHandlers  = function (map) {
+    var self = this;
+    Object.keys(map).forEach(function (type) {
+        self[type] = map[type];
+    });
+};
 MemcachedProtocolServer.prototype.SET = function (sock, key, flags, exptime, data, noreply) {
     if (!noreply) {
         sock.sendServerError("Not implemented.");
@@ -273,28 +277,32 @@ module.exports = {
     TextParser: TextParser
 };
 
-function MyServer() {
-    MemcachedProtocolServer.apply(this);
-    this.storage = {};
-}
-MyServer.prototype.GET = function (sock, keys) {
-    var self = this;
-    keys.forEach(function (key) {
-        if (self.storage[key]) {
-            var entry = self.storage[key];
-            sock.sendValue(key, entry[0], entry[1]);
+var server = new MemcachedProtocolServer();
+server.on('error', function (e) {
+    console.log("Socket error!!: " + e);
+});
+server.on('end', function () {
+    console.log("END!!");
+});
+server.setHandlers({
+    GET: function (sock, keys) {
+        var self = this;
+        keys.forEach(function (key) {
+            if (self.storage[key]) {
+                var entry = self.storage[key];
+                sock.sendValue(key, entry[0], entry[1]);
+            }
+        });
+        sock.sendEnd();
+    },
+    SET: function (sock, key, flags, exptime, data, noreply) {
+        var self = this;
+        self.storage[key] = [flags, data];
+        if (!noreply) {
+            sock.sendStored();
         }
-    });
-    sock.sendEnd();
-};
-MyServer.prototype.SET = function (sock, key, flags, exptime, data, noreply) {
-    var self = this;
-    self.storage[key] = [flags, data];
-    if (!noreply) {
-        sock.sendStored();
-    }
-};
-MyServer.prototype.DELETE = function (sock, key, noreply) {
+    },
+    DELETE: function (sock, key, noreply) {
     if (this.storage[key]) {
         delete this.storage[key];
         if (!noreply) {
@@ -305,49 +313,41 @@ MyServer.prototype.DELETE = function (sock, key, noreply) {
             sock.sendNotFound();
         }
     }
-};
-MyServer.prototype.DECR = function (sock, key, value, noreply) {
-    if (this.storage[key]) {
-        var v = parseInt(this.storage[key][1], 10);
-        this.storage[key][1] = '' + (v - value);
-        if (!noreply) {
-            sock.write(''+(v-value)+"\r\n");
+    },
+    DECR: function (sock, key, value, noreply) {
+        if (this.storage[key]) {
+            var v = parseInt(this.storage[key][1], 10);
+            this.storage[key][1] = '' + (v - value);
+            if (!noreply) {
+                sock.write(''+(v-value)+"\r\n");
+            }
+        } else {
+            if (!noreply) {
+                sock.sendNotFound();
+            }
         }
-    } else {
+    },
+    INCR: function (sock, key, value, noreply) {
+        if (this.storage[key]) {
+            var v = parseInt(this.storage[key][1], 10);
+            this.storage[key][1] = '' + (v + value);
+            if (!noreply) {
+                sock.write(''+(v+value)+"\r\n");
+            }
+        } else {
+            if (!noreply) {
+                sock.sendNotFound();
+            }
+        }
+    },
+    VERSION: function (sock) {
+        sock.sendVersion("4649");
+    },
+    FLUSH_ALL: function (sock, delay, noreply) {
+        this.storage = {};
         if (!noreply) {
-            sock.sendNotFound();
+            sock.sendOK();
         }
     }
-};
-MyServer.prototype.INCR = function (sock, key, value, noreply) {
-    if (this.storage[key]) {
-        var v = parseInt(this.storage[key][1], 10);
-        this.storage[key][1] = '' + (v + value);
-        if (!noreply) {
-            sock.write(''+(v+value)+"\r\n");
-        }
-    } else {
-        if (!noreply) {
-            sock.sendNotFound();
-        }
-    }
-};
-MyServer.prototype.VERSION = function (sock) {
-    sock.sendVersion("4649");
-};
-MyServer.prototype.FLUSH_ALL = function (sock, delay, noreply) {
-    this.storage = {};
-    if (!noreply) {
-        sock.sendOK();
-    }
-};
-inherits(MyServer, MemcachedProtocolServer);
-
-var server = new MyServer();
+});
 server.listen(22422);
-server.on('error', function (e) {
-    console.log("Socket error!!: " + e);
-});
-server.on('end', function () {
-    console.log("END!!");
-});
