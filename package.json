@@ -1,0 +1,21 @@
+{
+  "name": "memcached-protocol-server",
+  "version": "0.0.1",
+  "description": "Memcached protocol server framework",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "perl tests/01_simple.pl"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/tokuhirom/memcached-protocol-server.git"
+  },
+  "keywords": [
+    "memcached"
+  ],
+  "author": "Tokuhiro Matsuno",
+  "license": "BSD"
+}
