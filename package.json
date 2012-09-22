@@ -1,6 +1,6 @@
 {
   "name": "memcached-protocol-server",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Memcached protocol server framework",
   "main": "index.js",
   "directories": {
