@@ -5,6 +5,108 @@ var events =  require('events');
 var util = require('util');
 var inherits = require('inherits');
 
+var TextParser = {
+    get: function (buffer, self, csock) {
+        var get = buffer.match(/^get ([^\r\n]+)\r\n/);
+        if (get) {
+            self.GET(csock, get[1].split(' '));
+            return buffer.slice(get[0].length);
+        }
+        return buffer;
+    },
+    set: function (buffer, self, csock) {
+        // <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
+        // - <command name> is "set", "add", "replace", "append" or "prepend"
+        var cmd = buffer.match(/^(set|add|replace|append|prepend) ([^ \r\n]+) ([0-9]+) ([0-9]+) ([0-9]+)( noreply)?\r\n/);
+        if (cmd) {
+            var key = cmd[2];
+            var flags = parseInt(cmd[3], 10);
+            var exptime = parseInt(cmd[4], 10);
+            var bytes = parseInt(cmd[5], 10);
+            if (buffer.length - cmd[0].length >= bytes + 2) {
+                var data = buffer.slice(cmd[0].length, cmd[0].length+bytes);
+                self[cmd[1].toUpperCase()](csock, key, flags, exptime, data, !!cmd[6]);
+                return buffer.slice(cmd[0].length + bytes + 2);
+            }
+        }
+        return buffer;
+    },
+    'delete': function (buffer, self, csock) {
+        var del = buffer.match(/^delete ([^ \r\n]+)( noreply)?\r\n/);
+        if (del) {
+            self.DELETE(csock, del[1], !!del[2]);
+            return buffer.slice(del[0].length);
+        }
+        return buffer;
+    },
+    'stats': function (buffer, self, csock) {
+        var stats = buffer.match(/^stats(?: ([^\r\n]+))\r\n/);
+        if (stats) {
+            self.STATS(csock, stats[1]);
+            return buffer.slice(stats[0].length);
+        }
+        return buffer;
+    },
+    'quit': function (buffer, self, csock) {
+        var quit = buffer.match(/^quit\r\n/);
+        if (quit) {
+            self.QUIT(csock);
+            return buffer.slice(quit[0].length);
+        }
+        return buffer;
+    },
+    verbosity: function (buffer, self, csock) {
+        var m = buffer.match(/^verbosity ([0-9]+)( noreply)?\r\n/);
+        if (m) {
+            self.VERBOSITY(csock, parseInt(m[1], 10), !!m[2]);
+            return buffer.slice(m[0].length);
+        }
+        return buffer;
+    },
+    flush_all: function (buffer, self, csock) {
+        var m = buffer.match(/^flush_all(?: ([0-9]+))( noreply)?\r\n/);
+        if (m) {
+            var delay = parseInt(m[1], 10);
+            self.FLUSH_ALL(csock, delay, !!m[2]);
+            return buffer.slice(m[0].length);
+        }
+        return buffer;
+    },
+    incr: function (buffer, self, csock) {
+        var m = buffer.match(/^(incr|decr) ([^ \r\n]+) ([0-9]+)( noreply)?\r\n/);
+        if (m) {
+            var key = m[2];
+            var value = parseInt(m[3], 10);
+            self[m[1].toUpperCase()](csock, key, value, !!m[4]);
+            return buffer.slice(m[0].length);
+        }
+        return buffer;
+    },
+    touch: function (buffer, self, csock) {
+        var m = buffer.match(/^touch ([^ \r\n]+) ([0-9]+)( noreply)?\r\n/);
+        if (m) {
+            var key = m[1];
+            var exptime = parseInt(m[2], 10);
+            self.TOUCH(csock, key, exptime, !!m[3]);
+            return buffer.slice(m[0].length);
+        }
+        return buffer;
+    },
+    version: function (buffer, self, csock) {
+        var version = buffer.match(/^version\r\n/);
+        if (version) {
+            self.VERSION(csock);
+            return buffer.slice(version[0].length);
+        }
+        return buffer;
+    }
+};
+['add', 'replace', 'append', 'prepend'].forEach(function (e) {
+    TextParser[e] = TextParser.set;
+});
+TextParser.decr = TextParser.incr;
+TextParser.flush = TextParser.flush_all;
+
 function MemcachedProtocolServer(cb) {
     var self = this;
     this.server = net.createServer(function (sock) {
@@ -14,84 +116,56 @@ function MemcachedProtocolServer(cb) {
         sock.on('data', function (d) {
             buffer += d;
 
-            var get = buffer.match(/^get ([^\r\n]+)\r\n/);
-            if (get) {
-                self.GET(csock, get[1].split(' '));
-                buffer = buffer.slice(get[0].length);
-                return;
-            }
-
-            // <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
-            // - <command name> is "set", "add", "replace", "append" or "prepend"
-            var cmd = buffer.match(/^(set|add|replace|append|prepend) ([^ \r\n]+) ([0-9]+) ([0-9]+) ([0-9]+)( noreply)?\r\n/);
-            if (cmd) {
-                var key = cmd[2];
-                var flags = parseInt(cmd[3], 10);
-                var exptime = parseInt(cmd[4], 10);
-                var bytes = parseInt(cmd[5], 10);
-                if (buffer.length - cmd[0].length >= bytes + 2) {
-                    var data = buffer.slice(cmd[0].length, cmd[0].length+bytes);
-                    self[cmd[1].toUpperCase()](csock, key, flags, exptime, data, !!cmd[6]);
-                    buffer = buffer.slice(cmd[0].length + bytes + 2);
-                    return;
+            var m = buffer.match(/^([a-z]+)/);
+            if (m) {
+                if (TextParser[m[0]]) {
+                    buffer = TextParser[m[0]](buffer, self, csock);
                 } else {
-                    return;
+                    console.log("Unknown: " + m[0]);
+                    csock.sendServerError("Unknown command");
                 }
             }
-
-            var del = buffer.match(/^delete ([^ \r\n]+)( noreply)?\r\n/);
-            if (del) {
-                self.DELETE(csock, del[1], !!del[2]);
-                buffer = buffer.slice(del[0].length);
-                return;
-            }
-
-            var stats = buffer.match(/^stats(?: ([^\r\n]+))\r\n/);
-            if (stats) {
-                self.STATS(csock, stats[1]);
-                buffer = buffer.slice(stats[0].length);
-                return;
-            }
-
-            var quit = buffer.match(/^quit\r\n/);
-            if (quit) {
-                self.QUIT(csock);
-                buffer = buffer.slice(quit[0].length);
-                return;
-            }
-
-            var version = buffer.match(/^version\r\n/);
-            if (version) {
-                self.VERSION(csock);
-                buffer = buffer.slice(version[0].length);
-                return;
-            }
+            // note: we need to limit a buffer size?
+        });
+        sock.on('error', function (e) {
+            self.emit('error', e);
         });
         sock.on('end', function () {
-            console.log("END");
+            self.emit('end');
         });
     });
 }
+MemcachedProtocolServer.prototype = new events.EventEmitter();
 MemcachedProtocolServer.prototype.listen = function (port, host) {
     this.server.listen(port, host);
 };
 MemcachedProtocolServer.prototype.SET = function (sock, key, flags, exptime, data, noreply) {
-    sock.sendServerError("Not implemented.");
+    if (!noreply) {
+        sock.sendServerError("Not implemented.");
+    }
 };
 MemcachedProtocolServer.prototype.APPEND = function (sock, key, flags, exptime, data, noreply) {
-    sock.sendServerError("Not implemented.");
+    if (!noreply) {
+        sock.sendServerError("Not implemented.");
+    }
 };
 MemcachedProtocolServer.prototype.REPLACE = function (sock, key, flags, exptime, data, noreply) {
-    sock.sendServerError("Not implemented.");
+    if (!noreply) {
+        sock.sendServerError("Not implemented.");
+    }
 };
 MemcachedProtocolServer.prototype.PREPEND = function (sock, key, flags, exptime, data, noreply) {
-    sock.sendServerError("Not implemented.");
+    if (!noreply) {
+        sock.sendServerError("Not implemented.");
+    }
 };
 MemcachedProtocolServer.prototype.GET = function (sock, keys) {
     sock.sendServerError("Not implemented.");
 };
 MemcachedProtocolServer.prototype.DELETE = function (sock, key, noreply) {
-    sock.sendServerError("Not implemented.");
+    if (!noreply) {
+        sock.sendServerError("Not implemented.");
+    }
 };
 MemcachedProtocolServer.prototype.GETS = function (sock, keys) {
     sock.sendServerError("Not implemented.");
@@ -105,6 +179,31 @@ MemcachedProtocolServer.prototype.QUIT = function (sock) {
 MemcachedProtocolServer.prototype.VERSION = function (sock) {
     sock.sendServerError("Not implemented.");
 };
+MemcachedProtocolServer.prototype.INCR = function (sock, key, value, noreply) {
+    if (!noreply) {
+        sock.sendServerError("Not implemented.");
+    }
+};
+MemcachedProtocolServer.prototype.DECR = function (sock, key, value, noreply) {
+    if (!noreply) {
+        sock.sendServerError("Not implemented.");
+    }
+};
+MemcachedProtocolServer.prototype.VERBOSITY = function (sock, verbosity, noreply) {
+    if (!noreply) {
+        sock.sendOK();
+    }
+};
+MemcachedProtocolServer.prototype.FLUSH_ALL = function (sock, delay, noreply) {
+    if (!noreply) {
+        sock.sendOK();
+    }
+};
+MemcachedProtocolServer.prototype.TOUCH = function (sock, key, exptime, noreply) {
+    if (!noreply) {
+        sock.sendServerError("Not implemented.");
+    }
+};
 
 function MemcachedProtocolServerSocket(sock) {
     this.sock = sock;
@@ -112,6 +211,15 @@ function MemcachedProtocolServerSocket(sock) {
 MemcachedProtocolServerSocket.prototype = {
     close: function () {
         this.sock.close();
+    },
+    sendStat: function (name, value) {
+        this.sock.write("STAT " + name + " " + value + "\r\n");
+    },
+    sendTouch: function () {
+        this.sock.write("TOUCHED\r\n");
+    },
+    sendError: function () {
+        this.sock.write("ERROR\r\n");
     },
     sendEnd: function () {
         this.sock.write("END\r\n");
@@ -127,6 +235,9 @@ MemcachedProtocolServerSocket.prototype = {
     },
     sendExists: function () {
         this.sock.write("EXISTS\r\n");
+    },
+    sendOK: function () {
+        this.sock.write("OK\r\n");
     },
     sendNotFound: function () {
         this.sock.write("NOT_FOUND\r\n");
@@ -156,6 +267,12 @@ MemcachedProtocolServerSocket.prototype = {
     }
 };
 
+module.exports = {
+    Socket: MemcachedProtocolServerSocket,
+    Server: MemcachedProtocolServer,
+    TextParser: TextParser
+};
+
 function MyServer() {
     MemcachedProtocolServer.apply(this);
     this.storage = {};
@@ -173,10 +290,8 @@ MyServer.prototype.GET = function (sock, keys) {
 MyServer.prototype.SET = function (sock, key, flags, exptime, data, noreply) {
     var self = this;
     self.storage[key] = [flags, data];
-    console.log("SET!");
     if (!noreply) {
         sock.sendStored();
-        sock.sendEnd();
     }
 };
 MyServer.prototype.DELETE = function (sock, key, noreply) {
@@ -191,10 +306,48 @@ MyServer.prototype.DELETE = function (sock, key, noreply) {
         }
     }
 };
+MyServer.prototype.DECR = function (sock, key, value, noreply) {
+    if (this.storage[key]) {
+        var v = parseInt(this.storage[key][1], 10);
+        this.storage[key][1] = '' + (v - value);
+        if (!noreply) {
+            sock.write(''+(v-value)+"\r\n");
+        }
+    } else {
+        if (!noreply) {
+            sock.sendNotFound();
+        }
+    }
+};
+MyServer.prototype.INCR = function (sock, key, value, noreply) {
+    if (this.storage[key]) {
+        var v = parseInt(this.storage[key][1], 10);
+        this.storage[key][1] = '' + (v + value);
+        if (!noreply) {
+            sock.write(''+(v+value)+"\r\n");
+        }
+    } else {
+        if (!noreply) {
+            sock.sendNotFound();
+        }
+    }
+};
 MyServer.prototype.VERSION = function (sock) {
     sock.sendVersion("4649");
+};
+MyServer.prototype.FLUSH_ALL = function (sock, delay, noreply) {
+    this.storage = {};
+    if (!noreply) {
+        sock.sendOK();
+    }
 };
 inherits(MyServer, MemcachedProtocolServer);
 
 var server = new MyServer();
 server.listen(22422);
+server.on('error', function (e) {
+    console.log("Socket error!!: " + e);
+});
+server.on('end', function () {
+    console.log("END!!");
+});
