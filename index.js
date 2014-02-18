@@ -28,7 +28,7 @@ var TextParser = {
         return [buffer];
     },
     'delete': function (buffer, self, csock) {
-        var del = buffer.match(/^delete ([^ \r\n]+)( noreply)?\r\n/);
+        var del = buffer.match(/^delete ([^ \r\n]+)(?: [0-9]+)?( noreply)?\r\n/);
         if (del) {
             return [buffer.slice(del[0].length), 'DELETE', [del[1], !!del[2]]];
         }
